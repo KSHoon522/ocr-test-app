@@ -1,0 +1,113 @@
+/* class _CameraScreenState extends State<CameraScreen> {
+  CameraController? controller;
+
+  @override
+  void initState() {
+    super.initState();
+    controller = CameraController(cameras[0], ResolutionPreset.medium);
+    controller!.initialize().then((_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    controller?.dispose();
+    super.dispose();
+  }
+
+  Future<void> takePicture() async {
+    if (!controller!.value.isInitialized) {
+      print("Controller is not initialized");
+      return;
+    }
+
+    var image = await controller!.takePicture();
+    await sendImageToAPI(File(image.path));
+  }
+
+  /* Future<File?> takePicture() async {
+    final picker = ImagePicker();
+    final pickedFile = await picker.pickImage(source: ImageSource.camera);
+
+    if (pickedFile != null) {
+      return File(pickedFile.path);
+    } else {
+      print('사진 촬영이 취소되었습니다.');
+      return null;
+    }
+  } */
+
+  Future<void> sendImageToAPI(File imagePath) async {
+    var uri = Uri.parse('https://api.upstage.ai/v1/document-ai/ocr');
+    var request = http.MultipartRequest('POST', uri)
+      ..headers['Authorization'] = 'Bearer $apiKey'
+      ..files
+          .add(await http.MultipartFile.fromPath('document', imagePath.path));
+
+    var response = await request.send();
+
+    if (response.statusCode == 200) {
+      print('OCR 처리 성공');
+      var responseData = await response.stream.toBytes();
+      var responseString = utf8.decode(responseData);
+      print(responseString);
+    } else {
+      print('OCR 처리 실패');
+      print(response.reasonPhrase);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!controller!.value.isInitialized) {
+      return Container();
+    }
+    return Scaffold(
+      appBar: AppBar(title: const Text('카메라')),
+      body: Column(
+        children: [
+          Expanded(
+            // LayoutBuilder를 Expanded로 감싸서 크기 제한
+            child: SafeArea(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final double statusBarHeight =
+                      MediaQuery.of(context).padding.top;
+                  final double appBarHeight =
+                      kToolbarHeight + MediaQuery.of(context).padding.top;
+                  final double availableHeight =
+                      constraints.maxHeight - appBarHeight - statusBarHeight;
+                  return Stack(
+                    children: <Widget>[
+                      Container(
+                          key: _previewContainerKey,
+                          child: CameraPreview(controller!)), // 카메라 프리뷰
+                      CustomPaint(
+                        size: Size(constraints.maxWidth,
+                            constraints.maxHeight), // LayoutBuilder 제약을 사용
+                        painter: GuidePainter(),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ),
+          Center(
+            child: ElevatedButton(
+              onPressed: () async {
+                await takePicture();
+              },
+              child: const Icon(Icons.camera),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+ */
