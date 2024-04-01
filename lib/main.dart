@@ -1,20 +1,18 @@
-import 'package:flutter/material.dart';
-import 'package:camera/camera.dart';
-import 'package:http/http.dart' as http;
-import 'package:ocr_test_app/screens/ResultList.dart';
-import 'dart:io';
 import 'dart:convert';
-import 'package:image/image.dart' as img;
-import 'package:path_provider/path_provider.dart';
-
-import 'package:ocr_test_app/screens/result.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:http/http.dart' as http;
+import 'package:camera/camera.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-List<CameraDescription> cameras = [];
-const apiKey = '';
+import 'package:ocr_test_app/screens/ResultList.dart';
+import 'package:ocr_test_app/screens/result.dart';
 
-Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+List<CameraDescription> cameras = [];
+
+void main() async {
+  await dotenv.load(fileName: 'asset/config/.env');
   cameras = await availableCameras();
   runApp(const MyApp());
 }
@@ -25,26 +23,169 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const MaterialApp(
-      home: MainScreen(),
+      home: ImageAnalysisPage(),
     );
   }
 }
 
-class MainScreen extends StatelessWidget {
-  const MainScreen({super.key});
+class ImageAnalysisPage extends StatefulWidget {
+  const ImageAnalysisPage({super.key});
+
+  @override
+  _ImageAnalysisPageState createState() => _ImageAnalysisPageState();
+}
+
+class _ImageAnalysisPageState extends State<ImageAnalysisPage> {
+  final ocrapiKey = dotenv.env['OCR_API_Key'];
+  final openAIapiKey = dotenv.env['OpenAIapiKey'];
+  final ImagePicker _picker = ImagePicker();
+  bool _isAnalyzing = false;
+
+  Future<void> _pickAndAnalyzeImage() async {
+    setState(() {
+      _isAnalyzing = true; // 분석 시작
+    });
+    final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
+    if (image != null) {
+      final bytes = await image.readAsBytes();
+      final base64Image = base64Encode(bytes);
+
+      // OCR 처리
+      final ocrText = await sendImageToAPI(image);
+
+      // GPT-4-Vision-Preview 모델 분석 요청
+      await _analyzeImageWithGPT4(ocrText, base64Image);
+    }
+    setState(() {
+      _isAnalyzing = false; // 분석 완료
+    });
+  }
+
+  Future<String?> sendImageToAPI(XFile imagePath) async {
+    var uri = Uri.parse('https://api.upstage.ai/v1/document-ai/ocr');
+    var request = http.MultipartRequest('POST', uri)
+      ..headers['Authorization'] = 'Bearer $ocrapiKey'
+      ..files
+          .add(await http.MultipartFile.fromPath('document', imagePath.path));
+
+    var response = await request.send();
+
+    if (response.statusCode == 200) {
+      var responseData = await response.stream.toBytes();
+      var responseString = utf8.decode(responseData);
+      var jsonResponse = jsonDecode(responseString);
+      return jsonResponse['text'];
+    } else {
+      print('OCR 처리 실패');
+    }
+    return null;
+  }
+
+  Future<void> _analyzeImageWithGPT4(
+      String? ocrText, String base64Image) async {
+    const String apiUrl = 'https://api.openai.com/v1/chat/completions';
+
+    const prompt =
+        "다음은 이 사진의 텍스트야. 이미지의 왼쪽과 오른쪽을 구분해서 카테고리와 메뉴명 그리고 가격을 표로 보여주고, json 으로 정리해줘. 이미지에서 간격이 넓은건 별도 카테고리고, 가까이 있으면서 카테고리 구분없이 세로로 정렬된건 동일한 카테고리 내용이야";
+
+    final response = await http.post(
+      Uri.parse(apiUrl),
+      headers: {
+        'Authorization': 'Bearer $openAIapiKey',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'model': 'gpt-4-vision-preview',
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {"type": "text", "text": "$prompt, $ocrText"},
+              {
+                "type": "image_url",
+                "image_url": {"url": "data:image/jpeg;base64,$base64Image"}
+              }
+            ]
+          }
+        ],
+        "max_tokens": 1500
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      final String decodedBody = utf8.decode(response.bodyBytes);
+      final responseData = jsonDecode(decodedBody);
+      if (!mounted) return;
+      saveResult(responseData);
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => OCRResultScreen(result: responseData),
+        ),
+      );
+    } else {
+      return print('$response.statusCode: $response.reasonPhrase');
+    }
+  }
+
+  Future<void> saveResult(Map<String, dynamic> result) async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    List<String>? results = prefs.getStringList('ocrResults');
+    List resultList = results != null
+        ? results.map((result) => jsonDecode(result)).toList()
+        : [];
+    resultList.add(result);
+    await prefs.setStringList(
+        'ocrResults', resultList.map((result) => jsonEncode(result)).toList());
+  }
+
+  Future<void> takePicture() async {
+    setState(() {
+      _isAnalyzing = true; // 분석 시작
+    });
+    final XFile? image = await _picker.pickImage(source: ImageSource.camera);
+    if (image != null) {
+      final bytes = await image.readAsBytes();
+      final base64Image = base64Encode(bytes);
+
+      // OCR 처리
+      final ocrText = await sendImageToAPI(image);
+
+      // GPT-4-Vision-Preview 모델 분석 요청
+      await _analyzeImageWithGPT4(ocrText, base64Image);
+    }
+    setState(() {
+      _isAnalyzing = false;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('메인 화면')),
-      body: const Center(child: Text('Floating 버튼을 눌러 카메라를 실행하세요.')),
+      appBar: AppBar(
+        title: const Text('OCR Test & Gpt-4-Vision'),
+      ),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _isAnalyzing
+                ? const Column(
+                    children: [
+                      CircularProgressIndicator(),
+                      SizedBox(height: 16),
+                      Text('이미지 분석 중...'),
+                    ],
+                  )
+                : ElevatedButton(
+                    onPressed: _pickAndAnalyzeImage,
+                    child: const Text('이미지 선택'),
+                  ),
+          ],
+        ),
+      ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (context) => const CameraScreen()),
-          );
-        },
+        onPressed: takePicture,
         child: const Icon(Icons.camera_alt),
       ),
       bottomNavigationBar: BottomAppBar(
@@ -70,7 +211,7 @@ class MainScreen extends StatelessWidget {
     );
   }
 }
-
+/* 
 class CameraScreen extends StatefulWidget {
   const CameraScreen({super.key});
 
@@ -79,6 +220,8 @@ class CameraScreen extends StatefulWidget {
 }
 
 class _CameraScreenState extends State<CameraScreen> {
+  final ocrapiKey = dotenv.env['OCR_API_Key'];
+  final openAIapiKey = dotenv.env['OpenAIapiKey'];
   CameraController? controller;
 
   @override
@@ -99,15 +242,6 @@ class _CameraScreenState extends State<CameraScreen> {
     super.dispose();
   }
 
-  /* Future<void> takePicture() async {
-    if (!controller!.value.isInitialized) {
-      print("Controller is not initialized");
-      return;
-    }
-
-    var image = await controller!.takePicture();
-    await sendImageToAPI(File(image.path));
-  } */
   Future<void> takePicture() async {
     if (!controller!.value.isInitialized) {
       print("Controller is not initialized");
@@ -118,7 +252,8 @@ class _CameraScreenState extends State<CameraScreen> {
     final image = await controller!.takePicture();
 
     // 이미지 파일을 불러옴
-    final originalImage = img.decodeImage(File(image.path).readAsBytesSync());
+    final originalImageBytes = File(image.path).readAsBytesSync();
+    final originalImage = img.decodeImage(originalImageBytes);
 
     if (originalImage != null) {
       // 가이드에 맞춰 이미지를 자름
@@ -131,21 +266,25 @@ class _CameraScreenState extends State<CameraScreen> {
       final croppedImage = img.copyCrop(originalImage,
           x: startX, y: startY, width: width, height: height);
 
+      final bytes = img.encodePng(croppedImage);
+      final base64Image = base64Encode(bytes);
+
       // 잘린 이미지를 새 파일에 저장
       final croppedFilePath =
           '${(await getTemporaryDirectory()).path}/cropped.png';
-      final croppedFile = File(croppedFilePath)
-        ..writeAsBytesSync(img.encodePng(croppedImage));
-
+      File(croppedFilePath).writeAsBytesSync(bytes);
+      final XFile xCroppedFile = XFile(croppedFilePath);
       // 잘린 이미지를 API에 보냄
-      await sendImageToAPI(croppedFile);
+      final ocrText = await sendImageToAPI(xCroppedFile);
+
+      await _analyzeImageWithGPT4(ocrText, base64Image);
     }
   }
 
-  Future<void> sendImageToAPI(File imagePath) async {
+  Future<String?> sendImageToAPI(XFile imagePath) async {
     var uri = Uri.parse('https://api.upstage.ai/v1/document-ai/ocr');
     var request = http.MultipartRequest('POST', uri)
-      ..headers['Authorization'] = 'Bearer $apiKey'
+      ..headers['Authorization'] = 'Bearer $ocrapiKey'
       ..files
           .add(await http.MultipartFile.fromPath('document', imagePath.path));
 
@@ -155,16 +294,57 @@ class _CameraScreenState extends State<CameraScreen> {
       var responseData = await response.stream.toBytes();
       var responseString = utf8.decode(responseData);
       var jsonResponse = jsonDecode(responseString);
+      return jsonResponse['text'];
+    } else {
+      print('OCR 처리 실패');
+    }
+    return null;
+  }
+
+  Future<void> _analyzeImageWithGPT4(
+      String? ocrText, String base64Image) async {
+    const String apiUrl = 'https://api.openai.com/v1/chat/completions';
+
+    const prompt =
+        "다음은 이 사진의 텍스트야. 이미지의 왼쪽과 오른쪽을 구분해서 카테고리와 메뉴명 그리고 가격을 표로 보여주고, json 으로 정리해줘. 이미지에서 간격이 넓은건 별도 카테고리고, 가까이 있으면서 카테고리 구분없이 세로로 정렬된건 동일한 카테고리 내용이야";
+
+    final response = await http.post(
+      Uri.parse(apiUrl),
+      headers: {
+        'Authorization': 'Bearer $openAIapiKey',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'model': 'gpt-4-vision-preview',
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {"type": "text", "text": "$prompt, $ocrText"},
+              {
+                "type": "image_url",
+                "image_url": {"url": "data:image/jpeg;base64,$base64Image"}
+              }
+            ]
+          }
+        ],
+        "max_tokens": 1500
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      final String decodedBody = utf8.decode(response.bodyBytes);
+      final responseData = jsonDecode(decodedBody);
       if (!mounted) return;
-      saveResult(jsonResponse);
+      saveResult(responseData);
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (context) => OCRResultScreen(result: jsonResponse),
+          builder: (context) => OCRResultScreen(result: responseData),
         ),
       );
     } else {
-      print('OCR 처리 실패');
+      return print(response.reasonPhrase);
     }
   }
 
@@ -193,14 +373,10 @@ class _CameraScreenState extends State<CameraScreen> {
             child: SafeArea(
               child: LayoutBuilder(
                 builder: (context, constraints) {
-                  final double statusBarHeight =
-                      MediaQuery.of(context).padding.top;
                   final double appBarHeight =
                       kToolbarHeight + MediaQuery.of(context).padding.top;
-                  final double availableHeight = constraints.maxHeight -
-                      appBarHeight -
-                      statusBarHeight -
-                      20;
+                  final double availableHeight =
+                      constraints.maxHeight - appBarHeight - 20;
                   return Stack(
                     children: <Widget>[
                       CameraPreview(controller!), // 카메라 프리뷰
@@ -216,11 +392,15 @@ class _CameraScreenState extends State<CameraScreen> {
             ),
           ),
           Center(
-            child: ElevatedButton(
-              onPressed: () async {
-                await takePicture();
-              },
-              child: const Icon(Icons.camera),
+            child: Column(
+              children: [
+                ElevatedButton(
+                  onPressed: () async {
+                    await takePicture();
+                  },
+                  child: const Icon(Icons.camera),
+                ),
+              ],
             ),
           ),
         ],
@@ -275,3 +455,4 @@ class GuidePainter extends CustomPainter {
     return false;
   }
 }
+ */
