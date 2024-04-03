@@ -40,6 +40,7 @@ class _ImageAnalysisPageState extends State<ImageAnalysisPage> {
   final openAIapiKey = dotenv.env['OpenAIapiKey'];
   final ImagePicker _picker = ImagePicker();
   bool _isAnalyzing = false;
+  String _AnalyzingState = '';
 
   Future<void> _pickAndAnalyzeImage() async {
     setState(() {
@@ -49,10 +50,14 @@ class _ImageAnalysisPageState extends State<ImageAnalysisPage> {
     if (image != null) {
       final bytes = await image.readAsBytes();
       final base64Image = base64Encode(bytes);
-
+      setState(() {
+        _AnalyzingState = 'OCR 처리중';
+      });
       // OCR 처리
       final ocrText = await sendImageToAPI(image);
-
+      setState(() {
+        _AnalyzingState = 'GPT-4-Vision-Preview 모델 분석중';
+      });
       // GPT-4-Vision-Preview 모델 분석 요청
       await _analyzeImageWithGPT4(ocrText, base64Image);
     }
@@ -147,10 +152,14 @@ class _ImageAnalysisPageState extends State<ImageAnalysisPage> {
     if (image != null) {
       final bytes = await image.readAsBytes();
       final base64Image = base64Encode(bytes);
-
+      setState(() {
+        _AnalyzingState = 'OCR 처리중';
+      });
       // OCR 처리
       final ocrText = await sendImageToAPI(image);
-
+      setState(() {
+        _AnalyzingState = 'GPT-4-Vision-Preview 모델 분석중';
+      });
       // GPT-4-Vision-Preview 모델 분석 요청
       await _analyzeImageWithGPT4(ocrText, base64Image);
     }
@@ -170,11 +179,11 @@ class _ImageAnalysisPageState extends State<ImageAnalysisPage> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             _isAnalyzing
-                ? const Column(
+                ? Column(
                     children: [
-                      CircularProgressIndicator(),
-                      SizedBox(height: 16),
-                      Text('이미지 분석 중...'),
+                      const CircularProgressIndicator(),
+                      const SizedBox(height: 16),
+                      Text(_AnalyzingState),
                     ],
                   )
                 : ElevatedButton(
